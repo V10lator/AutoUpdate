@@ -469,7 +469,7 @@ public class AutoUpdate implements Runnable, Listener
    * Don't call this directly!
    */
   @EventHandler(ignoreCancelled = false)
-  public void updateCmdInagme(PlayerCommandPreprocessEvent event)
+  public void updateCmd(PlayerCommandPreprocessEvent event)
   {
 	try
 	{
@@ -482,30 +482,6 @@ public class AutoUpdate implements Runnable, Listener
 	  if(split.length > 1 && !plugin.getName().equalsIgnoreCase(split[1]))
 		return;
 	  update(event.getPlayer());
-	}
-	catch(Throwable t)
-	{
-	  printStackTraceSync(t, false);
-	}
-  }
-  
-  /**
-   * This is internal stuff.
-   * Don't call this directly!
-   */
-  @EventHandler
-  public void updateCmdConsole(ServerCommandEvent event)
-  {
-	try
-	{
-	  String[] split = event.getCommand().split(" ");
-	  if(!split[0].equalsIgnoreCase("update"))
-		return;
-	  if(!enabled || !needUpdate)
-		return;
-	  if(split.length > 1 && !plugin.getName().equalsIgnoreCase(split[1]))
-		return;
-	  update(event.getSender());
 	}
 	catch(Throwable t)
 	{
