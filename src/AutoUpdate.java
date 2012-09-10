@@ -1,4 +1,4 @@
-
+// Add your package name here...
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -11,6 +11,7 @@ import java.io.StringWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Logger;
 
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
@@ -21,10 +22,10 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.server.ServerCommandEvent;
 import org.bukkit.permissions.Permissible;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitScheduler;
-import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
@@ -32,7 +33,7 @@ import org.json.simple.parser.ParseException;
 /**
  * 
  * @author V10lator
- * @version 1.1
+ * @version 1.2
  * website: http://forums.bukkit.org/threads/autoupdate-update-your-plugins.84421/
  *
  */
@@ -52,15 +53,11 @@ public class AutoUpdate implements Runnable, Listener
    * COLOR_ERROR = The text color for error messages.
    */
   private long delay = 216000L;
-  private final String ymlPrefix = "";
-  private final String ymlSuffix = "";
-  private final String bukkitdevPrefix = "";
-  private final String bukkitdevSuffix = "";
   private String bukkitdevSlug = "";
   private final ChatColor COLOR_INFO = ChatColor.BLUE;
   private final ChatColor COLOR_OK = ChatColor.GREEN;
   private final ChatColor COLOR_ERROR = ChatColor.RED;
-  private boolean debug = false;
+  private boolean debug = true;
   /*
    * End of configuration.
    * 
@@ -71,11 +68,10 @@ public class AutoUpdate implements Runnable, Listener
    * plugin and change the version to something unique (like adding -<yourName>).
    */
   
-  private final String version = "1.1";
+  private final String version = "1.2";
   
   private final Plugin plugin;
   private final String bukget;
-  private final String bukgetFallback;
   private int pid = -1;
   private final String av;
   private Configuration config;
@@ -112,12 +108,11 @@ public class AutoUpdate implements Runnable, Listener
 	if(plugin == null)
 	  throw new Exception("Plugin can not be null");
 	this.plugin = plugin;
-	av = ymlPrefix+plugin.getDescription().getVersion()+ymlSuffix;
+	av = plugin.getDescription().getVersion();
 	if(bukkitdevSlug == null || bukkitdevSlug.equals(""))
 	  bukkitdevSlug = plugin.getName();
 	bukkitdevSlug = bukkitdevSlug.toLowerCase();
-	bukget = "http://bukget.v10lator.de/"+bukkitdevSlug;
-	bukgetFallback = "http://bukget.org/api/plugin/"+bukkitdevSlug+"/latest";
+	bukget = "http://api.bukget.org/api2/bukkit/plugin/"+bukkitdevSlug+"/latest";
 	if(delay < 72000L)
 	{
 	  plugin.getLogger().info("[AutoUpdate] delay < 72000 ticks not supported. Setting delay to 72000.");
@@ -222,18 +217,53 @@ public class AutoUpdate implements Runnable, Listener
 	  throw new FileNotFoundException("Config can not be null");
 	try
 	{
-	  while(!lock.compareAndSet(false, true))
-		continue; //TODO: This blocks the main thread...
-	  this.config = config;
-	  if(!config.isSet("AutoUpdate"))
-		config.set("AutoUpdate", true);
-	  checkState(config.getBoolean("AutoUpdate"), true);
-	  lock.set(false);
+	  if(!lock.compareAndSet(false, true))
+	  {
+		ConfigSetter cf = new ConfigSetter(config);
+		cf.setPid(plugin.getServer().getScheduler().scheduleSyncRepeatingTask(plugin, cf, 0L, 1L));
+	  }
+	  else
+	  {
+		setConfig2(config);
+		lock.set(false);
+	  }
 	}
 	catch(Throwable t)
 	{
 	  printStackTraceSync(t, false);
 	}
+  }
+  
+  private class ConfigSetter implements Runnable
+  {
+	private final Configuration config;
+	private int pid;
+	
+	private ConfigSetter(Configuration config)
+	{
+	  this.config = config;
+	}
+	
+	private void setPid(int pid)
+	{
+	  this.pid = pid;
+	}
+	
+	public void run()
+	{
+	  if(!lock.compareAndSet(false, true))
+		return;
+	  setConfig2(config);
+	  lock.set(false);
+	  plugin.getServer().getScheduler().cancelTask(pid);
+	}
+  }
+  
+  private void setConfig2(Configuration config)
+  {
+	if(!config.isSet("AutoUpdate"))
+	  config.set("AutoUpdate", true);
+	checkState(config.getBoolean("AutoUpdate"), true);
   }
   
   /**
@@ -263,26 +293,19 @@ public class AutoUpdate implements Runnable, Listener
 	  try
 	  {
 		InputStreamReader ir;
-		try
+		URL url = new URL(bukget);
+		HttpURLConnection con = (HttpURLConnection)url.openConnection();
+		con.connect();
+		int res = con.getResponseCode();
+		if(res != 200)
 		{
-		  URL url = new URL(bukget);
-		  ir = new InputStreamReader(url.openStream());
+		  if(debug)
+			plugin.getServer().getScheduler().scheduleSyncDelayedTask(plugin, new SyncMessageDelayer(null, new String[] {"[AutoUpdate] WARNING: Bukget returned "+res}));
+		  lock.set(false);
+		  return;
 		}
-		catch(Exception e)
-		{
-		  URL url = new URL(bukgetFallback);
-		  HttpURLConnection con = (HttpURLConnection)url.openConnection();
-		  con.connect();
-		  int res = con.getResponseCode();
-		  if(res != 200)
-		  {
-			if(debug)
-				plugin.getServer().getScheduler().scheduleSyncDelayedTask(plugin, new SyncMessageDelayer(null, new String[] {"[AutoUpdate] WARNING: Bukget returned "+res}));
-			lock.set(false);
-			return;
-		  }
-		  ir = new InputStreamReader(con.getInputStream());
-		}
+		ir = new InputStreamReader(con.getInputStream());
+
 		
 		String nv;
 		try
@@ -298,17 +321,17 @@ public class AutoUpdate implements Runnable, Listener
 		  }
 		  
 		  JSONObject jo = (JSONObject)o;
-		  JSONArray ja = (JSONArray)jo.get("versions");
-		  pluginURL = (String)jo.get("bukkitdev_link");
-		  jo = (JSONObject)ja.get(0);
-		  nv = bukkitdevPrefix+jo.get("name")+bukkitdevSuffix;
+		  pluginURL = (String)jo.get("link");
+		  jo = (JSONObject)jo.get("versions");
+		  nv = (String)jo.get("version");
 		  if(av.equals(nv) || (updateVersion != null && updateVersion.equals(nv)))
 		  {
 			ir.close();
+			pluginURL = null;
 			lock.set(false);
 			return;
 		  }
-		  updateURL = (String)jo.get("dl_link");
+		  updateURL = (String)jo.get("download");
 		  updateVersion = nv;
 		  type = (String)jo.get("type");
 		  needUpdate = true;
@@ -417,15 +440,21 @@ public class AutoUpdate implements Runnable, Listener
 	{
 	  try
 	  {
-		CommandSender cs;
 		if(p != null)
-		  cs = plugin.getServer().getPlayerExact(p);
+		{
+		  Player p = plugin.getServer().getPlayerExact(this.p);
+		  if(p != null)
+			for(String msg: msgs)
+			  if(msg != null)
+				p.sendMessage(msg);
+		}
 		else
-		  cs = plugin.getServer().getConsoleSender();
-		if(cs != null)
+		{
+		  Logger log = plugin.getLogger();
 		  for(String msg: msgs)
 			if(msg != null)
-			  cs.sendMessage(msg);
+			  log.info(msg);
+		}
 	  }
 	  catch(Throwable t)
 	  {
@@ -440,7 +469,7 @@ public class AutoUpdate implements Runnable, Listener
    * Don't call this directly!
    */
   @EventHandler(ignoreCancelled = false)
-  public void updateCmd(PlayerCommandPreprocessEvent event)
+  public void updateCmdInagme(PlayerCommandPreprocessEvent event)
   {
 	try
 	{
@@ -453,6 +482,30 @@ public class AutoUpdate implements Runnable, Listener
 	  if(split.length > 1 && !plugin.getName().equalsIgnoreCase(split[1]))
 		return;
 	  update(event.getPlayer());
+	}
+	catch(Throwable t)
+	{
+	  printStackTraceSync(t, false);
+	}
+  }
+  
+  /**
+   * This is internal stuff.
+   * Don't call this directly!
+   */
+  @EventHandler
+  public void updateCmdConsole(ServerCommandEvent event)
+  {
+	try
+	{
+	  String[] split = event.getCommand().split(" ");
+	  if(!split[0].equalsIgnoreCase("update"))
+		return;
+	  if(!enabled || !needUpdate)
+		return;
+	  if(split.length > 1 && !plugin.getName().equalsIgnoreCase(split[1]))
+		return;
+	  update(event.getSender());
 	}
 	catch(Throwable t)
 	{
@@ -545,16 +598,16 @@ public class AutoUpdate implements Runnable, Listener
 	BukkitScheduler bs = plugin.getServer().getScheduler();
 	try
 	{
-	  String prefix = plugin.getName()+" [AutoUpdate] ";
+	  String prefix = "[AutoUpdate] ";
 	  StringWriter sw = new StringWriter();
 	  PrintWriter pw = new PrintWriter(sw);
 	  t.printStackTrace(pw);
 	  String[] sts = sw.toString().replace("\r", "").split("\n");
 	  String[] out;
 	  if(expected)
-		out = new String[sts.length+31];
+		out = new String[sts.length+26];
 	  else
-		out = new String[sts.length+33];
+		out = new String[sts.length+28];
 	  out[0] = prefix;
 	  out[1] = prefix+"Internal error!";
 	  out[2] = prefix+"If this bug hasn't been reported please open a ticket at http://forums.bukkit.org/threads/autoupdate-update-your-plugins.84421/";
@@ -566,16 +619,11 @@ public class AutoUpdate implements Runnable, Listener
 	  out[++i] = prefix+"          ======= DUMP =======";
 	  out[++i] = prefix+"version        : "+version;
 	  out[++i] = prefix+"delay          : "+delay;
-	  out[++i] = prefix+"ymlPrefix      : "+ymlPrefix;
-	  out[++i] = prefix+"ymlSuffix      : "+ymlSuffix;
-	  out[++i] = prefix+"bukkitdevPrefix: "+bukkitdevPrefix;
-	  out[++i] = prefix+"bukkitdevSuffix: "+bukkitdevSuffix;
 	  out[++i] = prefix+"bukkitdevSlug  : "+bukkitdevSlug;
 	  out[++i] = prefix+"COLOR_INFO     : "+COLOR_INFO.name();
 	  out[++i] = prefix+"COLO_OK        : "+COLOR_OK.name();
 	  out[++i] = prefix+"COLOR_ERROR    : "+COLOR_ERROR.name();
 	  out[++i] = prefix+"bukget         : "+bukget;
-	  out[++i] = prefix+"bukgetFallback : "+bukgetFallback;
 	  out[++i] = prefix+"pid            : "+pid;
 	  out[++i] = prefix+"av             : "+av;
 	  out[++i] = prefix+"config         : "+config;
@@ -618,8 +666,9 @@ public class AutoUpdate implements Runnable, Listener
 		  }
 		  pid = -1;
 		  config = null;
-		  needUpdate = updatePending = false;
+		  needUpdate = updatePending = enabled = false;
 		  updateURL = updateVersion = pluginURL = type = null;
+		  lock.set(false);
 		}
 	  });
 	}
