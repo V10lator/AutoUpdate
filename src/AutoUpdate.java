@@ -8,23 +8,34 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
 import org.bukkit.ChatColor;
+import org.bukkit.Server;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.PluginCommand;
+import org.bukkit.command.SimpleCommandMap;
 import org.bukkit.configuration.Configuration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
-import org.bukkit.event.server.ServerCommandEvent;
 import org.bukkit.permissions.Permissible;
+import org.bukkit.permissions.Permission;
+import org.bukkit.permissions.PermissionAttachment;
+import org.bukkit.permissions.PermissionAttachmentInfo;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.SimplePluginManager;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
@@ -33,20 +44,16 @@ import org.json.simple.parser.ParseException;
 /**
  * 
  * @author V10lator
- * @version 1.2
+ * @version 1.4
  * website: http://forums.bukkit.org/threads/autoupdate-update-your-plugins.84421/
  *
  */
-public class AutoUpdate implements Runnable, Listener
+public class AutoUpdate implements Runnable, Listener, CommandExecutor, CommandSender
 {
   /*
    * Configuration:
    * 
    * delay = The delay this class checks for new updates. This time is in ticks (1 tick = 1/20 second).
-   * ymlPrefix = A prefix added to the version string from your plugin.yml.
-   * ymlSuffix = A suffix added to the version string from your plugin.yml.
-   * bukkitdevPrefix = A prefix added to the version string fetched from bukkitDev.
-   * bukkitdevSuffix = A suffix added to the version string fetched from bukkitDev.
    * bukitdevSlug = The bukkitDev Slug. Leave empty for autodetection (uses plugin.getName().toLowerCase()).
    * COLOR_INFO = The default text color.
    * COLOR_OK = The text color for positive messages.
@@ -68,10 +75,9 @@ public class AutoUpdate implements Runnable, Listener
    * plugin and change the version to something unique (like adding -<yourName>).
    */
   
-  private final String version = "1.2";
+  private final String version = "1.4";
   
   private final Plugin plugin;
-  private final String bukget;
   private int pid = -1;
   private final String av;
   private Configuration config;
@@ -84,6 +90,8 @@ public class AutoUpdate implements Runnable, Listener
   private String updateVersion;
   private String pluginURL;
   private String type;
+  
+  private ArrayList<CommandExecutor> otherUpdaters;
   
   /**
    * This will use your main configuration (config.yml).
@@ -107,18 +115,20 @@ public class AutoUpdate implements Runnable, Listener
   {
 	if(plugin == null)
 	  throw new Exception("Plugin can not be null");
+	if(!plugin.isEnabled())
+	  throw new Exception("Plugin not enabled");
 	this.plugin = plugin;
 	av = plugin.getDescription().getVersion();
 	if(bukkitdevSlug == null || bukkitdevSlug.equals(""))
 	  bukkitdevSlug = plugin.getName();
 	bukkitdevSlug = bukkitdevSlug.toLowerCase();
-	bukget = "http://api.bukget.org/api2/bukkit/plugin/"+bukkitdevSlug+"/latest";
 	if(delay < 72000L)
 	{
 	  plugin.getLogger().info("[AutoUpdate] delay < 72000 ticks not supported. Setting delay to 72000.");
 	  delay = 72000L;
 	}
 	setConfig(config);
+	registerCommand();
 	plugin.getServer().getPluginManager().registerEvents(this, plugin);
   }
   
@@ -293,7 +303,7 @@ public class AutoUpdate implements Runnable, Listener
 	  try
 	  {
 		InputStreamReader ir;
-		URL url = new URL(bukget);
+		URL url = new URL("http://api.bukget.org/api2/bukkit/plugin/"+bukkitdevSlug+"/latest");
 		HttpURLConnection con = (HttpURLConnection)url.openConnection();
 		con.connect();
 		int res = con.getResponseCode();
@@ -305,7 +315,6 @@ public class AutoUpdate implements Runnable, Listener
 		  return;
 		}
 		ir = new InputStreamReader(con.getInputStream());
-
 		
 		String nv;
 		try
@@ -321,7 +330,6 @@ public class AutoUpdate implements Runnable, Listener
 		  }
 		  
 		  JSONObject jo = (JSONObject)o;
-		  pluginURL = (String)jo.get("link");
 		  jo = (JSONObject)jo.get("versions");
 		  nv = (String)jo.get("version");
 		  if(av.equals(nv) || (updateVersion != null && updateVersion.equals(nv)))
@@ -332,6 +340,7 @@ public class AutoUpdate implements Runnable, Listener
 			return;
 		  }
 		  updateURL = (String)jo.get("download");
+		  pluginURL = (String)jo.get("link");
 		  updateVersion = nv;
 		  type = (String)jo.get("type");
 		  needUpdate = true;
@@ -463,25 +472,73 @@ public class AutoUpdate implements Runnable, Listener
 	}
   }
   
-  //TODO: Find a better way for dynamic command handling
+  private void registerCommand()
+  {
+	try
+	{
+	  SimplePluginManager pm = (SimplePluginManager)plugin.getServer().getPluginManager();
+	  Field f = SimplePluginManager.class.getDeclaredField("commandMap");
+	  f.setAccessible(true);
+	  SimpleCommandMap cm = (SimpleCommandMap)f.get(pm);
+	  f.setAccessible(false);
+	  if(cm.getCommand("update") == null) // First!
+	  {
+		Constructor<PluginCommand> c = PluginCommand.class.getDeclaredConstructor(String.class, Plugin.class);
+		c.setAccessible(true);
+		PluginCommand cmd = c.newInstance("update", plugin);
+		c.setAccessible(false);
+		cmd.setExecutor(this);
+		cm.register("update", cmd);
+		otherUpdaters = new ArrayList<CommandExecutor>();
+	  }
+	  else
+		plugin.getServer().dispatchCommand(this, "update [REGISTER]");
+	}
+	catch(Throwable t)
+	{
+	  printStackTraceSync(t, false);
+	}
+  }
+  
   /**
    * This is internal stuff.
    * Don't call this directly!
    */
-  @EventHandler(ignoreCancelled = false)
-  public void updateCmd(PlayerCommandPreprocessEvent event)
+  public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args)
   {
 	try
 	{
-	  String[] split = event.getMessage().split(" ");
-	  if(!split[0].equalsIgnoreCase("/update"))
-		return;
-	  event.setCancelled(true);
-	  if(!enabled || !needUpdate)
-		return;
-	  if(split.length > 1 && !plugin.getName().equalsIgnoreCase(split[1]))
-		return;
-	  update(event.getPlayer());
+	  if(args.length > 0)
+	  {
+		if(args[0].equals("[REGISTER]"))
+		{
+		  otherUpdaters.add((CommandExecutor)sender);
+		  return true;
+		}
+		if(!plugin.getName().equalsIgnoreCase(args[0]))
+		{
+		  informOtherUpdaters(sender, args);
+		  return true;
+		}
+	  }
+	  else
+		informOtherUpdaters(sender, args);
+	  update(sender);
+	}
+	catch(Throwable t)
+	{
+	  printStackTraceSync(t, false);
+	}
+	return true;
+  }
+  
+  private void informOtherUpdaters(CommandSender sender, String[] args)
+  {
+	try
+	{
+	  if(otherUpdaters != null)
+		for(CommandExecutor ou: otherUpdaters)
+		  ou.onCommand(sender, null, null, args);
 	}
 	catch(Throwable t)
 	{
@@ -513,13 +570,12 @@ public class AutoUpdate implements Runnable, Listener
 			catch(InterruptedException e)
 			{
 			}
-			continue;
 		  }
 		  String out;
 		  try
 		  {
 			File to = new File(plugin.getServer().getUpdateFolderFile(), updateURL.substring(updateURL.lastIndexOf('/')+1, updateURL.length()));
-			File tmp = new File(to.getAbsolutePath()+".au");
+			File tmp = new File(to.getPath()+".au");
 			if(!tmp.exists())
 			{
 			  plugin.getServer().getUpdateFolderFile().mkdirs();
@@ -537,21 +593,11 @@ public class AutoUpdate implements Runnable, Listener
 			os.close();
 			if(to.exists())
 			  to.delete();
-			if(tmp.renameTo(to))
-			{
-			  out = COLOR_OK+plugin.getName()+" ready! Restart server to finish the update.";
-			  needUpdate = false;
-			  updatePending = true;
-			  updateURL = type = null;
-			}
-			else
-			{
-			  out = COLOR_ERROR+plugin.getName()+" failed to update!";
-			  if(tmp.exists())
-				tmp.delete();
-			  if(to.exists())
-				to.delete();
-			}
+			tmp.renameTo(to);
+			out = COLOR_OK+plugin.getName()+" ready! Restart server to finish the update.";
+			needUpdate = false;
+			updatePending = true;
+			updateURL = type = null;
 		  }
 		  catch(Exception e)
 		  {
@@ -581,9 +627,9 @@ public class AutoUpdate implements Runnable, Listener
 	  String[] sts = sw.toString().replace("\r", "").split("\n");
 	  String[] out;
 	  if(expected)
-		out = new String[sts.length+26];
+		out = new String[sts.length+25];
 	  else
-		out = new String[sts.length+28];
+		out = new String[sts.length+27];
 	  out[0] = prefix;
 	  out[1] = prefix+"Internal error!";
 	  out[2] = prefix+"If this bug hasn't been reported please open a ticket at http://forums.bukkit.org/threads/autoupdate-update-your-plugins.84421/";
@@ -599,7 +645,6 @@ public class AutoUpdate implements Runnable, Listener
 	  out[++i] = prefix+"COLOR_INFO     : "+COLOR_INFO.name();
 	  out[++i] = prefix+"COLO_OK        : "+COLOR_OK.name();
 	  out[++i] = prefix+"COLOR_ERROR    : "+COLOR_ERROR.name();
-	  out[++i] = prefix+"bukget         : "+bukget;
 	  out[++i] = prefix+"pid            : "+pid;
 	  out[++i] = prefix+"av             : "+av;
 	  out[++i] = prefix+"config         : "+config;
@@ -684,4 +729,110 @@ public class AutoUpdate implements Runnable, Listener
   {
 	return debug;
   }
+
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public PermissionAttachment addAttachment(Plugin arg0) {
+	return null;
+  }
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public PermissionAttachment addAttachment(Plugin arg0, int arg1) {
+	return null;
+  }
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public PermissionAttachment addAttachment(Plugin arg0, String arg1, boolean arg2) {
+	return null;
+  }
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public PermissionAttachment addAttachment(Plugin arg0, String arg1, boolean arg2, int arg3) {
+	return null;
+  }
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public Set<PermissionAttachmentInfo> getEffectivePermissions() {
+	return null;
+  }
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public boolean hasPermission(String arg0) {
+	return false;
+  }
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public boolean hasPermission(Permission arg0) {
+	return false;
+  }
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public boolean isPermissionSet(String arg0) {
+	return false;
+  }
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public boolean isPermissionSet(Permission arg0) {
+	return false;
+  }
+  /**
+   * This is a dummy. Don't use
+   */
+  public void recalculatePermissions() {}
+  /**
+   * This is a dummy. Don't use
+   */
+  public void removeAttachment(PermissionAttachment arg0) {}
+  /**
+   * This is a dummy. Don't use
+   * @return false
+   */
+  public boolean isOp() {
+	return false;
+  }
+  /**
+   * This is a dummy. Don't use
+   */
+  public void setOp(boolean arg0) {}
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public String getName() {
+	return null;
+  }
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public Server getServer() {
+	return null;
+  }
+  /**
+   * This is a dummy. Don't use
+   */
+  public void sendMessage(String arg0) {}
+  /**
+   * This is a dummy. Don't use
+   * @return null
+   */
+  public void sendMessage(String[] arg0) {}
 }
